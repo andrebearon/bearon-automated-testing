@@ -1,0 +1,23 @@
+const { chromium } = require('@playwright/test');
+const h = require('./tests/helpers');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+(async () => {
+  const proxy = process.env.PLAYWRIGHT_PROXY ? { server: process.env.PLAYWRIGHT_PROXY } : undefined;
+  const browser = await chromium.launch({ headless: true, proxy });
+  const context = await browser.newContext({ baseURL: 'https://bearon.studio', storageState: 'auth/.storage-state.json', ignoreHTTPSErrors: Boolean(process.env.PLAYWRIGHT_PROXY) });
+  const page = await context.newPage();
+  await h.ensureWorkspace(page);
+  await page.goto('/console/pos/dashboard/pos/order-management/');
+  await sleep(3000);
+  await page.getByRole('button', { name: /pending orders/i }).first().click({ timeout: 15000 });
+  await page.waitForFunction(() => /PCEE-\d+/.test(document.body.innerText), { timeout: 20000 });
+  await sleep(1000);
+  const row = page.locator('tr', { hasText: 'PCEE-51001' }).first();
+  console.log('ROW:', (await row.innerText()).replace(/\n+/g, ' | '));
+  await row.getByRole('button', { name: 'View Details' }).click();
+  await sleep(2500);
+  const t = await page.locator('body').innerText();
+  console.log('DETAILS:', t.replace(/\n+/g, ' | ').slice(-700));
+  await browser.close();
+  console.log('PEND-WHO DONE');
+})().catch(e => { console.error('PROBE-FAIL:', e.message.slice(0, 400)); process.exit(1); });

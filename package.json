@@ -1,0 +1,20 @@
+{
+  "name": "bearon-core",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "auth": "node auth/setup.js",
+    "test": "npx playwright test",
+    "env-login": "node auth/env-login.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  }
+}
