@@ -320,3 +320,18 @@ Run 21:34:40–~22:01 SGT (~27 min of the 30-min budget; stopped at the 28-min c
 - Redundant best-effort cleanup re-tries in specs 3, 4, 5: each burns a 30s locator wait on an already-deleted row (~60s per spec). Cheap fix: check the row is gone first, or shorten the cleanup wait.
 - New leftovers in "Cafe muse2": category "CRUD Cat 17762736", register "Reg CRUD 18678059U" (Closed), order CEE-51025 (Paid). Default register untouched; hold-orders still ON; kitchen tickets restored OFF.
 - NOTE: this results file was held back from the first GitHub snapshot push (10 Nov ~21:52 SGT, commit b873fd02defbfcb0d3a0b536373e2cdb9a67de6b) — push it after this run.
+
+---
+
+## Gated chain 9-14, 10 Nov 2026 (evening)
+
+Run 22:06:09–22:10:26 SGT (~4.3 min). Andreas: "run test 9, if it passes continue to 10 and so on; only run the next test if the previous one passes; if it fails or times out in 5 minutes, let me know". Gated chain, 5-min cap per spec (timeout 300), overall 28-min budget. Step 0 bare Chromium check: OK 1.25s. Workspace "Cafe muse2" only. Console version NOT captured by the specs.
+
+### Result: CHAIN STOPPED at spec 9 — FAIL (1 failed, PLAYWRIGHT_EXIT=1, 4.1m)
+
+- **9. CRUD cash register — FAIL (4.1m, within the 5-min cap).** Register "Reg CRUD 19581562" created, renamed to "Reg CRUD 19581562U" (Closed). Then the till register pick did NOT apply again: "TILL REGISTER PICK NOT APPLIED (shows "Reg CRUD 19581562U (Counter)"), retrying". The retry click on the 2nd combobox was then blocked for ~4 min by an overlay — `<div data-state="open" ... class="fixed inset-0 z-50 ... bg-black/90"></div> intercepts pointer events` (408 retries) — and the click ended with `locator.click: Target crashed` at helpers.js:138 (openRegisterSession). Teardown also logged `EPERM: operation not permitted, write` (same signature as the 6 Nov VM flakiness). Open/close never verified. Leftover: register "Reg CRUD 19581562U" (Closed; no Delete control).
+- This is the THIRD consecutive occurrence of the pick-not-applied race (tonight's 1-9 re-run hang ~7.9 min; now this FAIL). New evidence this time: an open backdrop overlay intercepting pointer events on the register combobox, plus a target crash. The pick retry loop in helpers does not handle a blocking overlay — the retry needs a bounded wait AND an overlay check/dismiss before re-clicking. Do NOT treat this as an app-bug verdict yet: the pick race is a known test-side race, but the overlay detail is new and worth a probe (what dialog/backdrop is open at that point?).
+- **Chain stopped per Andreas's gate rule.** Specs 10, 11, 12, 13, 14 did NOT run.
+
+### What remains
+- Fix/diagnose the register-pick step first (bounded retry + overlay handling in openRegisterSession), then re-run spec 9 solo. Only if 9 passes does the chain continue to 10 (cash-register-e2e, fresh register), 11, 12, 13, 14 (build customer-pos-history spec if reached).
