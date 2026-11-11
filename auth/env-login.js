@@ -18,7 +18,7 @@ const fs = require('fs');
     console.error('Missing BEARON_TEST_EMAIL or BEARON_TEST_PASSWORD in the environment.');
     process.exit(1);
   }
-  // Proxy: PLAYWRIGHT_PROXY when set (VM: local-proxy.js, see README).
+  // Proxy: PLAYWRIGHT_PROXY when set (VM: scripts/vm/local-proxy.js, see README).
   // Otherwise no proxy (normal machine). ignoreHTTPSErrors mirrors the
   // config: only when the VM egress proxy re-signs TLS certificates.
   const proxy = process.env.PLAYWRIGHT_PROXY

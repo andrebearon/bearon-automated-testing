@@ -1,6 +1,6 @@
 // One-time login, run manually: `npm run auth`
 // Opens Chromium, goes to /login, and waits until the console loads
-// (URL contains /console). Log in with the TEST account ("Muse cafe") only.
+// (URL contains /console). Log in with the TEST account (workspace "Cafe muse2") only.
 // It then saves auth/.storage-state.json so later test runs need no login
 // and no password. Re-run this whenever the session expires.
 const { chromium } = require('@playwright/test');

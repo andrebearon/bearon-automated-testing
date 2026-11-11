@@ -1,18 +1,17 @@
 {
   "name": "bearon-core",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "directories": {
-    "test": "tests"
-  },
+  "description": "Playwright e2e tests for Bearon core flows (demo workspace only)",
+  "private": true,
   "scripts": {
     "auth": "node auth/setup.js",
-    "test": "npx playwright test",
-    "env-login": "node auth/env-login.js"
+    "env-login": "node auth/env-login.js",
+    "test": "playwright test",
+    "test:list": "playwright test --list",
+    "test:headed": "playwright test --headed",
+    "test:vm": "./scripts/vm/run-tests.sh",
+    "report": "playwright show-report"
   },
-  "keywords": [],
-  "author": "",
   "license": "ISC",
   "devDependencies": {
     "@playwright/test": "^1.64.1"
