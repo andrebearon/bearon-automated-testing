@@ -7,6 +7,7 @@
     "auth": "node auth/setup.js",
     "env-login": "node auth/env-login.js",
     "test": "playwright test",
+    "test:one": "node scripts/run-test.js",
     "test:idempotent": "IDEMPOTENT_ONLY=1 playwright test",
     "test:list": "playwright test --list",
     "test:headed": "playwright test --headed",

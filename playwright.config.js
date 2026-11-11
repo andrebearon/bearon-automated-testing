@@ -20,6 +20,8 @@ module.exports = defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: process.env.BEARON_BASE_URL || 'https://bearon.studio',
+    // HEADLESS=false in .env shows the browser; anything else (or unset) runs headless.
+    headless: !/^(false|0|no)$/i.test(process.env.HEADLESS || ''),
     // Only set by scripts/vm/run-tests.sh. The VM egress proxy re-signs TLS,
     // so certificate errors are ignored for that run only (test account only).
     proxy: process.env.PLAYWRIGHT_PROXY

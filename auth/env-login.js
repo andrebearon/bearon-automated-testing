@@ -1,4 +1,4 @@
-// Headless login with the DEMO/test account, saving auth/.storage-state.json.
+// Login with the DEMO/test account (headless unless HEADLESS=false), saving auth/.storage-state.json.
 // Credentials come from BEARON_TEST_EMAIL / BEARON_TEST_PASSWORD, loaded from
 // .env (see .env.example) or the shell environment. The password is never
 // written to a file or logged.
@@ -20,7 +20,9 @@ async function login() {
   const proxy = process.env.PLAYWRIGHT_PROXY
     ? { server: process.env.PLAYWRIGHT_PROXY }
     : undefined;
-  const browser = await chromium.launch({ headless: true, proxy });
+  // Same HEADLESS rule as playwright.config.js: only "false"/"0"/"no" shows the browser.
+  const headless = !/^(false|0|no)$/i.test(process.env.HEADLESS || '');
+  const browser = await chromium.launch({ headless, proxy });
   try {
     const context = await browser.newContext({
       ignoreHTTPSErrors: Boolean(process.env.PLAYWRIGHT_PROXY),

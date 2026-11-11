@@ -50,6 +50,7 @@ auth/
   env-login.js         Headless login with .env credentials, saves the session
   setup.js             Manual login in a headed browser (no .env needed)
 .env.example           Template for .env (credentials, optional base URL)
+scripts/run-test.js    Pick test cases by number or name (npm run test:one)
 scripts/vm/            Only for the sandbox VM whose egress proxy breaks Chromium
   local-proxy.js       Local CONNECT proxy that forwards to the egress proxy
   run-tests.sh         Starts the proxy, runs Playwright, prints PLAYWRIGHT_EXIT
@@ -109,23 +110,41 @@ Then edit `.env` with the **demo** account (workspace "Cafe muse2"):
 ```dotenv
 BEARON_TEST_EMAIL=<demo account email>
 BEARON_TEST_PASSWORD=<demo account password>
+HEADLESS=true                              # false = show the browser window
 # BEARON_BASE_URL=https://bearon.studio   # optional
 ```
 
 `.env` is gitignored. Variables already set in your shell take priority over `.env`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BEARON_TEST_EMAIL` | — (required for auto login) | Demo account email |
+| `BEARON_TEST_PASSWORD` | — (required for auto login) | Demo account password |
+| `HEADLESS` | `true` | `false` (or `0`, `no`) shows the browser for tests and the `.env` login |
+| `BEARON_BASE_URL` | `https://bearon.studio` | Environment to test |
+
+For a one-off run you can override it without editing `.env`:
+`HEADLESS=false npm run test:one -- 3`, or pass `--headed`.
 
 ### 2. Run tests
 
 ```bash
 npm test                                   # whole suite, in file order
 npm run test:idempotent                    # only tests that leave no data behind
-npx playwright test test-cases/03-supplier-crud.spec.js   # one test case
-npx playwright test 03 05                  # several, by filename match
+npm run test:one -- 3                      # one test case by number (3, 03, 7a)
+npm run test:one -- supplier-crud          # one test case by part of its file name
+npm run test:one -- 2 3 13                 # several test cases
+npm run test:one -- 3 --headed             # extra flags go to Playwright
+npm run test:one                           # no argument: list all test cases
 npx playwright test -g "supplier"          # by test title
 npm run test:headed                        # watch the browser
 npm run test:list                          # list tests without running
 npm run report                             # open the last HTML report
 ```
+
+`test:one` stops if a selector matches more than one file (e.g. `7` matches 07a
+and 07b, `crud` matches many) and lists the matches. Be more specific, or add
+`--all` to run every match. It prints a note when a picked test is `NOT_IDEMPOTENT`.
 
 ### How login works
 
@@ -133,13 +152,13 @@ You don't need to log in by hand. Before every run, `auth/global-setup.js`:
 
 1. opens `/console` with the saved session in `auth/.storage-state.json`;
 2. if the file is missing or the session has expired (redirect to the login
-   page), logs in headlessly with the `.env` credentials and saves a fresh session;
+   page), logs in with the `.env` credentials and saves a fresh session;
 3. stops the run with a clear error if a login is needed and `.env` has no credentials.
 
 Manual alternatives if you need them:
 
 ```bash
-npm run env-login   # headless login with .env credentials
+npm run env-login   # login with .env credentials (respects HEADLESS)
 npm run auth        # log in by hand in a headed browser (no .env needed)
 ```
 
@@ -151,6 +170,7 @@ There, Chromium cannot use the egress proxy directly, so run through the local p
 
 ```bash
 ./scripts/vm/run-tests.sh test-cases/03-supplier-crud.spec.js
+VM=1 npm run test:one -- 3                 # same, picking by number
 ```
 
 Read the result from the `N passed / M failed` lines or `PLAYWRIGHT_EXIT=`.
