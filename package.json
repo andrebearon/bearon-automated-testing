@@ -7,6 +7,7 @@
     "auth": "node auth/setup.js",
     "env-login": "node auth/env-login.js",
     "test": "playwright test",
+    "test:idempotent": "IDEMPOTENT_ONLY=1 playwright test",
     "test:list": "playwright test --list",
     "test:headed": "playwright test --headed",
     "test:vm": "./scripts/vm/run-tests.sh",
@@ -15,5 +16,8 @@
   "license": "ISC",
   "devDependencies": {
     "@playwright/test": "^1.64.1"
+  },
+  "engines": {
+    "node": ">=20.12"
   }
 }

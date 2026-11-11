@@ -2,8 +2,15 @@
 // Deterministic pass/fail on DOM text/values; trace + screenshot only on failure.
 const { defineConfig } = require('@playwright/test');
 
+// Load credentials and settings from .env (see .env.example). Shell env vars win.
+try { process.loadEnvFile(require('path').join(__dirname, '.env')); } catch { /* no .env — rely on the shell env */ }
+
 module.exports = defineConfig({
   testDir: './test-cases',
+  // IDEMPOTENT_ONLY=1 skips tests that leave data behind (`*-NOT_IDEMPOTENT.spec.js`).
+  testIgnore: process.env.IDEMPOTENT_ONLY ? /NOT_IDEMPOTENT/ : undefined,
+  // Logs in from .env when the saved session is missing or expired.
+  globalSetup: './auth/global-setup.js',
   // Each Bearon navigation can take 10–20s; most tests raise this with test.setTimeout().
   timeout: 300 * 1000,
   expect: { timeout: 30 * 1000 },
