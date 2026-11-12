@@ -335,3 +335,194 @@ Run 22:06:09–22:10:26 SGT (~4.3 min). Andreas: "run test 9, if it passes conti
 
 ### What remains
 - Fix/diagnose the register-pick step first (bounded retry + overlay handling in openRegisterSession), then re-run spec 9 solo. Only if 9 passes does the chain continue to 10 (cash-register-e2e, fresh register), 11, 12, 13, 14 (build customer-pos-history spec if reached).
+
+---
+
+## Pull from latest main + idempotency fixes + run 1–10, 11 Nov 2026 (afternoon)
+
+### Pull (16:50 SGT)
+
+Andreas: "Pull from latest main again where I refactor the code architecture there." Cloned `andrebearon/bearon-automated-testing` main at `e82b533` ("add more feedback about the test"). The refactor (e300a63, 4ce674b, e82b533): specs moved to `test-cases/NN-<area>-<what>.spec.js`, `tests/helpers.js` split into `utils/` modules, probes deleted, proxy/runner under `scripts/vm/`, results log under `docs/results/`, `.env` loading + auto re-login (`auth/global-setup.js`), `*-NOT_IDEMPOTENT.spec.js` naming + `npm run test:idempotent`. Applied over the local workspace; kept local-only files the repo does not carry: `.env`, `auth/.storage-state.json`, `chromium-watch-check.mjs` (kept at repo root — the watch cron needs it there; the refactor removed it). Results log was byte-identical on both sides. All files syntax-checked, `utils/index.js` loads, `playwright test --list` = 14 tests.
+
+### Spec-9 fix ported to the new structure
+
+The refactor's `utils/cash-register.js` had the old `openRegisterSession` without the overlay guard, so the 11 Nov morning fix was ported in: `clearBlockingOverlay` before every register-combobox click (Escape once, up to 5s to clear, fail fast if still open), bounded 2-attempt pick loop, 10s/15s click timeouts. Syntax-checked.
+
+### Idempotency (Andreas: "each test idempotent as much as possible; test 1's category is not deleted; if a record cannot be deleted, set its status to cancelled or voided — that counts as deleted")
+
+Implemented by a worker (code only, no runs), verified afterwards:
+- **01 — fixed + renamed** (`01-product-crud.spec.js`). Root cause: cleanup tried View → details-page Delete, but the details panel has no Delete, so it always threw inside `bestEffort` and the category stayed. Now uses new `deleteCategoryByKebab` (row kebab → Delete → confirm poll → verify absent), same pattern 02 uses.
+- **07a — renamed.** Orders already voided + refunded in-flow; cleanup now uses `deleteProductByKebab` instead of its inline copy. Leftover: 2 orders in terminal states only.
+- **07b — fixed + renamed.** Old cleanup clicked a generic `/Void/i` button with no reason and no verification — very likely never voided anything. Rewritten to the proven 07a void pattern (Void order → reason → Void order → reload → `Voided` verified, best-effort); product deleted best-effort.
+- **11 — fixed + renamed.** Delete tried first, Cancel only as fallback, at both levels (till panel, then OM → Pending Orders → Details). Also fixed a real bug: the old confirm matcher included `Cancel`, which could have clicked the dialog's dismiss button, and the old loop tried Cancel *before* Delete. Caveat: till-panel button names unproven (11 never ran green); the rename rests on the OM fallback, the proven path.
+- **12 — fixed + renamed.** Added void cleanup for the checked-out Paid order (07a pattern, verified).
+- **09, 10 — stay NOT_IDEMPOTENT by design.** Closed register remains (no delete control); 10 keeps one order Paid by design.
+- **08 — renamed by the worker, REVERTED after this run proved the void impossible** (see run below). File back to `08-kitchen-display-NOT_IDEMPOTENT.spec.js`; README + header corrected. Open question: whether the OM list row offers a void action for a kitchen-completed order — probe before renaming again.
+- README idempotency definition now states a record in a terminal state (voided / refunded / cancelled / Closed) counts as cleaned up; catalogue rows updated.
+
+### Run 1–10, one by one (16:56–~17:30 SGT; console v0.3.657; bare Chromium check OK 1.04s at start)
+
+- **01 product CRUD — PASS (1.1m).** Category delete proven in practice: `CATEGORY DELETE CONFIRMED: CRUD Cat 87406172`, verified absent. Test 1 leaves nothing behind now.
+- **02 category CRUD — PASS (31.5s).** Create, rename, delete verified.
+- **03 supplier CRUD — PASS (1.1m).** Cleanup skipped deleting the supplier — already deleted in-flow, so no row was left to find (benign).
+- **04 purchase order CRUD — PASS (2.7m).** Same benign cleanup skip (product row already gone).
+- **05 supplier + PO flow — PASS (2.6m).** Same benign cleanup skip.
+- **06 stock adjustment — PASS (1.4m).** Stock 10 → 7 verified, product deleted. B-CON-3 did NOT reproduce again (Submit enabled both times).
+- **07a sales / OM — PASS (1.8m).** CEE-51031 voided, CEE-51032 refunded Rp30,000, product deleted.
+- **07b product to order — PASS (1.2m).** New void cleanup proven: `CLEANUP: order CEE-51033 voided (verified after reload)`, product deleted.
+- **08 kitchen display — PASS (1.7m), but NOT idempotent.** Board Not started → Completed verified, tickets restored OFF, product deleted — but `CLEANUP SKIPPED: void order CEE-51034: no Void control on order CEE-51034`. After an order reaches Completed on the kitchen board, its details page shows NO Void control, so the order stays Paid. The old spec had the same void code without verification, so earlier "order voided" reports were unverified — the void likely never happened in those runs either. Leftover: CEE-51034 (Paid).
+- **09 cash register CRUD — PASS (49.6s). FIRST PASS since the 7 Nov run; the spec-9 fix is proven.** `TILL REGISTER SELECTED: Reg CRUD 88656033U (shown as "Reg CRUD 88656033U (Counter)")`, session opened, logs read, closed at Expected Rp0, Default guard OK. No overlay fired this time. Two test bugs fixed during this run (see below).
+- **10 cash register order mix — NO VERDICT (VM flakiness, not a test failure).** Failed at ~80s in `ensureTillRegister` (2nd call, before the refund-target sale): `Target crashed` waiting for the 2nd combobox, plus `EPERM: operation not permitted, write` on trace-file copies — the same VM signature as 6 Nov. The bare Chromium check right after FAILED too (`browserType.launch: Target page, context or browser has been closed`; last OK was the watch at 17:21 SGT). The VM blocker came back mid-run. Register was created and its session opened, product created, first sale (void target, 1× Cash Rp10,000) completed; void/refund/cancel/close never reached. Leftovers: one "Mix Reg" (session presumably still Open), "Mix Prod", one unidentified Paid order (Mix Prod 1× Rp10,000 Cash — ref never printed). Retry 10 when Chromium recovers.
+
+### Test bugs fixed during this run (all in `utils/cash-register.js` + spec 10)
+
+1. **The "(Counter)" suffix — the real cause behind the "pick not applied" retries.** The till register selector shows `"<name> (Counter)"`, and both `openRegisterSession` and spec 10's local `ensureTillRegister` compared the shown text with strict equality, so a pick that HAD applied was judged not-applied and retried. The suffix was already visible in the 10 Nov logs (`shows "Reg CRUD 18678059U (Counter)"`) — the retries that hung/crashed were chasing a mismatch that could never match. Fix: strip a trailing ` (...)` before comparing (both places). This reframes the 10 Nov failures: the pick applied on attempt 1; the retry click then hit the blocking overlay. The overlay guard is still needed (the 408-retry block was real), but the trigger was the suffix.
+2. **Cash Registers table pagination (15 rows/page, newest first).** Test 09's step-7 guard failed with `tr` hasText 'Default' not found — Default, the oldest register, sits on page 2 (page buttons "1" "2" at the bottom). Probes confirmed: 15 rows on page 1, no Default; the page HAS a "Search cash registers by name..." box, and searching "Default" finds it Open and untouched. Fix: new `searchCashRegister(page, name)` helper, now used in `registerStatus`, `closeRegisterSession`, and 09's step 7. Same pagination trap would have bitten any older register lookup.
+3. **Spec 10's `ensureTillRegister` now also uses the overlay guard** (`clearBlockingOverlay` exported from `utils/cash-register.js`) with 10s click timeouts.
+
+### What remains
+
+- Retry spec 10 solo when Chromium recovers (chromium-watch messages on the FAIL→OK flip; do not start until then). Its register-pick code is fixed, but the run never got past the second sale — the void/refund/cancel/close flow is still unverified in the new structure.
+- Probe the OM list row for a void action on a kitchen-completed order (CEE-51034) before renaming 08 idempotent again; if none exists, 08 stays NOT_IDEMPOTENT with a Paid leftover.
+- Spec 9 has now passed solo, so the standing block on pushing to GitHub is lifted for these changes (refactor pull + overlay fix + idempotency + (Counter)/pagination fixes) — push only with Andreas's go-ahead, as before. Same for updating the Notion "Test Status — Scenarios 1-14" page.
+- New leftovers in "Cafe muse2": registers "Reg CRUD 88402304U", "Reg CRUD 88469937U", "Reg CRUD 88656033U" (all Closed), one "Mix Reg" (session presumably Open) + "Mix Prod" + one unidentified Paid Mix Prod order; order CEE-51034 (Paid, kitchen-completed). Default register still Open and untouched.
+
+---
+
+## Spec 10 retries 2–5, 11 Nov 2026 (evening, console v0.3.657)
+
+Andreas: "Continue with test 10" (18:29 SGT, after the 17:51 Chromium recovery). Before each retry, the previous run's stale pending on Slot 1 was deleted via OM (PCEE-51001 each time — refs are reused) so step 4 had a free slot.
+
+### Retry 2 (18:48–19:06, 15.2m) — NO VERDICT at first, then diagnosed as a TEST BUG
+
+Mix Reg 94259301, Mix Prod 94259301, sales CEE-51040 (1× Cash Rp10,000), CEE-51041 (2× Card Rp20,000), CEE-51042 (1× Cash Rp10,000). The pending WAS saved on Slot 1 (PCEE-51001, Rp10,000, verified by probe afterwards; Mix Reg 94259301 left Open), but the run hit the 900s test timeout with no output after the hold-orders line — the same hang shape as the 7 Nov run. Playwright's timeout report (shell cap raised to 960s so the test timeout fires first) named the exact call: `utils/till.js:98` in `openPendingList`, `locator.click: waiting for getByRole('button', { name: 'Save Pending Order' })`. The failure snapshot explained it: after Save Order the app shows an **"Order Saved Successfully" dialog** over the pending panel (panel becomes `aria-hidden`, so its Show Orders button is invisible to role queries), and the cart is empty, so **"Save Pending Order" is DISABLED** — the click waited until the test timeout. Root cause: test bug (the helper assumed the panel stays usable after saving; the till.js comment saying so was wrong).
+
+### Test bug fixes (utils/till.js)
+
+1. New `dismissSavedDialog(page)`: closes the "Order Saved Successfully" dialog when present (no-op when absent). Called at the end of `savePendingOnSlot` and at the start of `openPendingList`.
+2. `openPendingList` now **fails fast** instead of hanging: if there is no Show Orders / Show Slots toggle and Save Pending Order is missing or disabled, it throws a clear error naming the state.
+3. Spec 10 step 4 now verifies the saved pending via **OM Pending Orders** (`gotoPendingTab`) instead of the till panel: after the dialog is closed, the till list cannot be reopened from an empty cart — "Save Pending Order" is disabled with no items, "Save to Pending Orders" is disabled, and the "1 pending orders" badge is a non-clickable generic (a probe clicking it on a fresh till load found no such text at all). OM lists the same pending with its ref and slot, which is all step 4 needs (step 5's cancel uses OM anyway). `openPendingList` is still used by specs 11/12 — they will hit the same wall when they run; the fail-fast error at least makes it a 2-minute failure instead of a 15-minute hang.
+
+### Retry 3 (19:07, 1.6m) — FAIL (test bug, the fail-fast working as designed)
+
+Mix Reg 95298081, sales CEE-51043/44/45. Dialog dismissal worked (`SAVED DIALOG present — closing it`), but `openPendingList` threw the new fail-fast error — the panel could not be reopened from the empty cart, as diagnosed above. This run is what motivated fix 3 (OM verification in step 4).
+
+### Retry 4 (19:12–19:15, 2.9m) — FAIL (test bug in step 7, cancel confirm)
+
+Mix Reg 95535859, sales CEE-51046/47/48. **PENDING SAVED: PCEE-51001 on Slot 1, Rp10.000** (OM verification works). **VOID VERIFIED: CEE-51046 is Voided after reload. REFUND VERIFIED: CEE-51047 refund of Rp20,000 recorded.** Then step 7 failed: after clicking "Cancel order" in OM Details, the confirm dialog is **"Cancel this order? The customer will see it as cancelled and it leaves your board. This cannot be undone." with Keep order / Cancel order / Close** — the old confirm matcher `/confirm|yes/i` never matched the confirm button (literally "Cancel order"), so the cancel was never confirmed and PCEE-51001 stayed in the Pending Orders list (`toHaveCount(0)` failed after 30s). Fix: the confirm click is now scoped to the dialog (`[role="dialog"]` hasText 'Cancel this order?' → its "Cancel order" button, exact). Leftover: PCEE-51001 deleted afterwards; Mix Reg 95535859 left Open with CEE-51046 Voided, CEE-51047 Refunded, CEE-51048 Paid.
+
+### Retry 5 (19:16–~19:20) — NO VERDICT (VM blocker returned mid-run)
+
+Mix Reg 95789726, sales CEE-51049 (1× Cash) and CEE-51050 (2× Card) completed; the 3rd sale never printed and the process died with no Playwright report and no new test-results dir. The chromium-watch 19:20 run recorded an OK→FAIL flip (`browserType.launch: Target page, context or browser has been closed`; bare check fails again as of 19:31). The cancel-confirm fix from retry 4 is still unproven. **Retry spec 10 when Chromium recovers** (watch messages on the FAIL→OK flip; do not start until then). Slot 1 is free (run 5 never saved a pending).
+
+### Leftovers in "Cafe muse2" from retries 2–5 (in addition to the afternoon run's)
+
+- Mix Reg 94259301 (Open; CEE-51040/41/42 Paid), Mix Reg 95298081 (Open; CEE-51043/44/45 Paid), Mix Reg 95535859 (Open; CEE-51046 Voided, CEE-51047 Refunded, CEE-51048 Paid), Mix Reg 95789726 (Open; CEE-51049/51050 Paid, 3rd sale never created). Each with its Mix Prod (94259301, 95298081, 95535859, 95789726). Plus the afternoon attempt's Mix Reg 93199995 (Open; CEE-51037/38/39 Paid) and Mix Prod 93199995. No register delete control exists — these stay as Closed/Open records; close the Open ones only if a future run needs a clean register list (do not touch Default).
+- The "1 pending orders" badge question (is there really no till entry point to the pending list with an empty cart?) is still open for specs 11/12 — their flows reopen the pending list from the till, so they need either the badge probed properly (with the run's register selected) or the same OM-based verification used for spec 10.
+
+---
+
+## Spec 11 (pending order CRUD) — 12 Nov 2026 (morning, console v0.3.657)
+
+Andreas: "Continue 11 and 12" (09:23 SGT). Spec 11 had never run green; its flow (create on Slot 2, reopen + qty 1→2, save again, delete) hit four distinct issues, each fixed in turn:
+
+### Attempt 1 — FAIL: "Save Order" never appeared (update step)
+
+Create passed (1× Rp15,000 on Slot 2, PCEE-51001, verified in the list) and the reopen worked, but the update save failed: the panel had remembered the orders-list view, so clicking "Slot 2" matched the table cell instead of the slot tile. Fix: `savePendingOnSlot` now switches to the slots view first (clicks "Show Slots" when the panel opened on the list).
+
+### Attempt 2 — NO VERDICT: browser target closed mid-run (VM blocker flicker)
+
+Error-context: `locator.click: Target page, context or browser has been closed` while clicking "Slot 2" in the update save. The watch log shows no FAIL (09:21 check OK); the bare check right after passed too — a transient flip. Slot 2 cleared and re-run.
+
+### Attempt 3 — FAIL (300s test timeout): occupied slot's label breaks the exact match
+
+The click waited the whole test timeout on `getByText('Slot 2', { exact: true })`. Snapshot: the panel was on the slots view and Slot 2 showed **"(Occupied)"** — its label is "Slot 2 (Occupied)", so the exact match never resolves. Probe (12 Nov): clicking the occupied Slot 2 tile selects nothing — Confirmation stays "Select a slot to continue", no "Save Order" appears. **The app cannot save a cart onto an occupied slot, including the slot the reopened pending itself occupies.** Fix: the update now deletes the old pending first (OM, proven path) and saves the changed cart fresh on the freed slot — the only achievable update path. Also `savePendingOnSlot` now bounds the slot click with a 15s expect so an unselectable slot fails fast instead of burning the whole test timeout.
+
+### Attempt 4 — killed by a service restart, no verdict
+
+The run had saved a pending on Slot 2 before the restart; the pending was deleted afterwards and the run re-started.
+
+### Attempt 5 — FAIL at ensureWorkspace: session expired overnight
+
+The saved session (refreshed 09:51) was already dead by ~10:00 — the run failed on the "Home" heading. The suite's global setup re-logs in from `.env` when the session is expired, but the check passed on a dead session that time. Refreshed by hand (`global-setup.js` → "Login OK") and re-run. Note: sessions from this environment seem short-lived; if ensureWorkspace fails again, refresh the session first.
+
+### Attempt 6 — FAIL: the reopened cart does not survive navigation
+
+After the OM delete + `goto(till)`, the cart no longer showed "2 pcs" — the till cart is page state and is lost on navigation. Fix: `deletePendingInOM` now runs in a **separate tab** (`page.context().newPage()`), so the till page and its cart are never navigated away from.
+
+### Attempt 7 — PASS (2.2m, PLAYWRIGHT_EXIT=0)
+
+- **PENDING CREATED:** 1 × Rp15,000 on Slot 2, ref PCEE-51001.
+- **PENDING UPDATED:** 2 × Rp15,000 = Rp30,000 on Slot 2 (delete-first update, cart survived in the till tab).
+- Delete: the till panel offered no Delete/Cancel control after the row click (the row click reopened the pending into the cart), so the OM fallback deleted it — **PENDING DELETED VIA OM DETAILS: PCEE-51001**, verified gone (Rp30.000 row absent from the list).
+- Product deleted (confirmed). **Leaves nothing behind.**
+
+### Helper fixes landed in utils/till.js (used by 11 and 12)
+
+- `dismissSavedDialog` (11 Nov): closes the "Order Saved Successfully" dialog after a save.
+- `openPendingList(page, { product })` (12 Nov): with an empty cart the panel cannot be opened ("Save Pending Order" is disabled) — the helper adds the given product first to enable it. Reopening a pending REPLACES the cart (probe-verified), so the added item does not contaminate the reopened order. Without a product and with an empty cart it fails fast with a clear error.
+- `savePendingOnSlot` switches to the slots view when the panel opened on the orders list, and bounds the slot click (15s expect) so an occupied/unselectable slot fails fast.
+- The till pending list cannot be reopened from an empty cart and an occupied slot is not selectable — both are app behaviours the specs now work around, not bugs to file (the update-by-delete-first is the only achievable path).
+
+---
+
+## Spec 12 (pending-order E2E: save on Slot 1, move to Slot 2, checkout) — 12 Nov 2026 (morning, console v0.3.657→v0.3.658; a deploy landed between runs)
+
+### Attempt 1 — FAIL (300s test timeout at step 3)
+
+Steps 1–2 passed (save 1× Rp15,000 on Slot 1; save again on Slot 2, verified Rp15.000 + Slot 2). Step 3's row click (`table tbody tr.first()`) waited the whole test timeout: the panel had been closed at the end of step 2, so no table existed — a missing `openPendingList` before the click (spec bug). Probe afterwards found the move had DUPLICATED, not moved: PCEE-51001 still on Slot 1, PCEE-51002 on Slot 2. **Re-saving a reopened pending on another slot creates a new pending and leaves the original in place.** Fixes: step 1 now captures the original ref (PCEE-…) and step 2 deletes the original via OM after the copy is saved, then verifies exactly 1 pending left, on Slot 2; step 3 opens the list first. `deletePendingInOM` moved into `utils/till.js` as an exported helper (separate tab, so the till cart survives).
+
+### Attempt 2 — PASS (1.9m), but the cleanup void was skipped
+
+Full flow green: save Slot 1 → move (copy + delete original) → checkout Cash CEE-51051 Rp15,000 → OM verified Paid. Cleanup log: `CLEANUP SKIPPED: void order CEE-51051: no Void control` — the cleanup used a non-waiting `count()` on a button that renders async after the details page loads, so it read 0 during the load. The Void button DOES exist (probe: details page shows "Void order" and "Refund Order"). CEE-51051 was voided by probe afterwards (verified after reload). Fix: the cleanup now waits for the button (`expect(...).toBeVisible({ timeout: 30000 })`).
+
+### Attempt 3 — FAIL at the move save (Slot 2 Occupied)
+
+`savePendingOnSlot` failed fast (15s expect) on the Slot 2 tile: the slots view showed "Slot 1 (Occupied) Slot 2 (Occupied)". Probe: the OM list held TWO rows both ref PCEE-51002 — Slot 1 = this run's new pending (Pend E2E 49421178), Slot 2 = the passing run's pending (Pend E2E 49216426), still listed as **Unpaid with Balance Due Rp15.000** even though it was checked out (CEE-51051 Paid, later Voided). **Checkout does NOT consume the pending order and does NOT free its slot** — the checked-out pending stays listed and its slot stays Occupied (app behaviour to flag; it blocked the next run). Also proven: **pending refs are reused across runs** (this run's new pending also got PCEE-51002), so deleting a pending by ref is ambiguous. Fix: cleanup deletes the checked-out pending by SLOT (new `deletePendingOnSlot(page, slot)` helper in `utils/till.js`, OM tab, row by slot text). Both stale pendings and the leftover product (Pend E2E 49421178) were cleared by probe before the re-run; the helper was proven by that probe.
+
+### Attempt 4 — PASS (2.5m, PLAYWRIGHT_EXIT=0), fully idempotent
+
+- **PENDING SAVED ON SLOT 1:** PCEE-51001, Rp15,000. **PENDING SAVED ON SLOT 2** (copy). Original deleted via OM. **MOVE VERIFIED:** exactly 1 pending left, on Slot 2.
+- **CHECKOUT COMPLETED:** CEE-51052, Rp15,000 Cash. **OM VERIFIED:** CEE-51052 Paid, Rp15,000.
+- **CLEANUP:** order CEE-51052 voided (verified after reload) — the void fix proven. Checked-out pending deleted by slot — the pending-delete fix proven. Product deleted (confirmed). **Leaves nothing behind.**
+
+---
+
+## Spec 13 (CRUD customer) — 12 Nov 2026 (afternoon, console v0.3.659)
+
+Andreas: "Continue 13 and 14" (13:11 SGT). No leftover "Test Cust" customers existed before the run.
+
+### Attempt 1 — FAIL (300s test timeout at the create submit)
+
+The Create Customer dialog was open with the form filled, but the spec's submit matcher `/^(Save|Create|Add)$/i` never matched — the dialog's button is literally **"Add Customer"**. The click waited the whole test timeout. Fix: click the button by its literal name.
+
+### Attempt 2 — FAIL (300s test timeout at the delete step)
+
+Create + update passed, but the delete step failed inside `deleteByKebab`: the customers list row's buttons are [name] [Open customer] [kebab], and the generic helper clicks button index 1 — "Open customer" — which navigated to the details page instead of opening a menu. No menuitem and no exact-text "Delete" existed there, and the helper's else branch clicked a non-existent exact "Delete" with no timeout bound, burning the whole test timeout. Probe: button index 2 IS the kebab (menu: "Open customer", "Quick View/Edit", "Delete"); the details page itself has NO Delete control. Fixes: `deleteByKebab` takes an optional `kebabIndex` (default 1; customers pass 2), and its else branch now fails fast (15s expect) instead of hanging. Leftover from this run (Test Cust 60700827) was deleted by probe afterwards.
+
+### Attempt 3 — PASS (25.7s), but the update step silently skipped
+
+Create, delete all worked — but the log showed `UPDATE SKIPPED: no phone input on details page`. The details page shows the phone as text, not an input. Probe: clicking the phone text reveals an inline editor (input appears) but there is no Save/Update button — the editor saves on Enter (filling without saving left the old phone). Fix: the update step now clicks the phone text, fills the new phone, presses Enter, and asserts the new phone is visible.
+
+### Attempt 4 — PASS (30.8s, PLAYWRIGHT_EXIT=0), full CRUD proven
+
+- **CUSTOMER CREATED:** Test Cust 61202803 (cust61202803@example.com, 6281234562803).
+- **CUSTOMER UPDATED:** phone → 6289876542803 (verified visible on the details page).
+- **DELETE CONFIRMED / CUSTOMER DELETED** (kebab index 2). **Leaves nothing behind.**
+
+---
+
+## Spec 14 (POS sale with a customer, history in customer details) — 12 Nov 2026 (afternoon, console v0.3.659)
+
+Built from scratch this session (no spec file existed). Probes first: the till cart has NO customer control; the checkout view has a **"Customer / Select a customer"** button opening a dialog (search box + table: Name / Email / Phone / Points / Joined Date, plus "Create New Customer"). Searching and clicking the customer row attaches it — the checkout then shows "Customer / <name>". `completeTillSale` gained an optional `customer` param for this picker.
+
+### Attempt 1 — PASS (1.9m, PLAYWRIGHT_EXIT=0)
+
+- **CUSTOMER CREATED:** Cust Sale 61473733. **PRODUCT CREATED:** Cust Sale Prod 61473733 @ Rp15,000.
+- **CUSTOMER SELECTED AT CHECKOUT:** Cust Sale 61473733. **SALE COMPLETED:** CEE-51053 (1× Rp15,000, Cash, Dine In).
+- **OM VERIFIED:** CEE-51053 listed. **CUSTOMER HISTORY VERIFIED:** CEE-51053 Rp15.000 appears on the customer's details page.
+- **CLEANUP:** order CEE-51053 voided (verified after reload); product deleted (confirmed); customer deleted (confirmed). **Leaves nothing behind.**
+
+The probe customer created to map the picker (Probe Cust 61248492) was deleted afterwards; no test customers remain.
+
+### Status after 12 Nov: 13 of 14 scenarios have passed individually (01–09, 11, 12, 13, 14). Only spec 10 has never run green — its cancel-confirm fix (retry 4) is still unproven after retry 5 got NO VERDICT (VM blocker). Console is now v0.3.659 (was v0.3.657 on 11 Nov, v0.3.658 in the morning).

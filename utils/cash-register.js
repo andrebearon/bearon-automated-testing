@@ -43,15 +43,27 @@ async function openRegisterIfNeeded(page) {
 
 async function registerStatus(page, name) {
   await page.goto(URLS.cashRegisters);
+  // The table shows 15 rows per page, newest first — an older register
+  // (e.g. Default) sits on page 2, so search for the name first.
+  await searchCashRegister(page, name);
   const row = page.locator('tr', { hasText: name }).first();
   await expect(row).toBeVisible({ timeout: 30000 });
   const text = await row.innerText();
   return /Open/.test(text) && !/Closed/.test(text) ? 'Open' : 'Closed';
 }
 
+// Filter the Cash Registers table by name (15 rows/page, newest first).
+async function searchCashRegister(page, name) {
+  const search = page.getByPlaceholder('Search cash registers by name...');
+  await expect(search).toBeVisible({ timeout: 30000 });
+  await search.fill(name);
+  await sleep(1500);
+}
+
 // Close a register session with closing cash = expected cash. Returns { expectedCash, panelText }.
 async function closeRegisterSession(page, registerName) {
   await page.goto(URLS.cashRegisters);
+  await searchCashRegister(page, registerName);
   const row = page.locator('tr', { hasText: registerName }).first();
   await expect(row).toBeVisible({ timeout: 30000 });
   // Fail fast if already closed, instead of waiting for the test timeout.
@@ -83,6 +95,33 @@ async function closeRegisterSession(page, registerName) {
   return { expectedCash, panelText };
 }
 
+// FIX (11 Nov 2026, gated chain 9-14, 10 Nov evening): the till register
+// pick failed 3x in a row; the 3rd time the retry click on the 2nd
+// combobox was blocked ~4 min by an open backdrop overlay
+// (<div data-state="open" class="fixed inset-0 z-50 ... bg-black/90">,
+// 408 retries) and ended "locator.click: Target crashed". Playwright
+// retries a blocked click until its timeout, so a bare click here can
+// burn minutes. Before every combobox click, check for that overlay:
+// wait briefly for it to settle, press Escape once, and if it is still
+// there fail fast with a clear diagnostic instead of retrying the click.
+// What dialog/backdrop is open at that point is still unknown — if this
+// throws, that is the probe to run next, not a reason to remove the guard.
+async function clearBlockingOverlay(page, label) {
+  const overlay = page.locator('div[data-state="open"].fixed.inset-0.z-50').first();
+  try {
+    await overlay.waitFor({ state: 'visible', timeout: 3000 });
+  } catch { return; } // No overlay — proceed.
+  console.log(`BLOCKING OVERLAY present before ${label} — pressing Escape once`);
+  await page.keyboard.press('Escape');
+  await sleep(1500);
+  try {
+    await overlay.waitFor({ state: 'hidden', timeout: 5000 });
+    console.log('BLOCKING OVERLAY cleared');
+  } catch {
+    throw new Error(`Blocking overlay still open before ${label} — not retrying the click (see 10 Nov gated-chain failure)`);
+  }
+}
+
 // Select a register in the till's Register combobox and open a session on it.
 async function openRegisterSession(page, registerName = 'Default') {
   if ((await registerStatus(page, registerName)) === 'Open') {
@@ -96,16 +135,22 @@ async function openRegisterSession(page, registerName = 'Default') {
   const current = (await combos.nth(1).innerText()).trim();
   if (current !== registerName) {
     // The option click can land without the selection taking; verify and retry once.
+    // NOTE (11 Nov 2026): the till selector shows the register as
+    // "<name> (Counter)" — the pick HAS applied when the name matches
+    // before the trailing parenthetical, so strip that suffix before
+    // comparing instead of failing on the display text.
+    const shownName = (s) => s.replace(/\s*\([^)]*\)\s*$/, '');
     for (let attempt = 0; attempt < 2; attempt++) {
-      await combos.nth(1).click();
+      await clearBlockingOverlay(page, 'till register pick');
+      await combos.nth(1).click({ timeout: 10000 });
       await sleep(1500);
       const opt = page.getByRole('option', { name: registerName }).first();
       await expect(opt).toBeVisible({ timeout: 15000 });
       await opt.click({ timeout: 15000 });
       await sleep(2000);
       const shown = (await combos.nth(1).innerText()).trim();
-      if (shown === registerName) {
-        console.log(`TILL REGISTER SELECTED: ${registerName}`);
+      if (shownName(shown) === registerName) {
+        console.log(`TILL REGISTER SELECTED: ${registerName} (shown as "${shown}")`);
         break;
       }
       console.log(`TILL REGISTER PICK NOT APPLIED (shows "${shown}"), retrying`);
@@ -125,7 +170,8 @@ async function openRegisterSession(page, registerName = 'Default') {
     await sleep(2000);
     const combos2 = page.locator('button[role="combobox"]');
     await expect(combos2.nth(1)).toBeVisible({ timeout: 30000 });
-    await combos2.nth(1).click();
+    await clearBlockingOverlay(page, 'till register re-pick');
+    await combos2.nth(1).click({ timeout: 10000 });
     await sleep(1500);
     await page.getByRole('option', { name: registerName }).first().click({ timeout: 15000 });
     await sleep(2000);
@@ -133,4 +179,4 @@ async function openRegisterSession(page, registerName = 'Default') {
   throw new Error(`Register ${registerName} still Closed after 2 open attempts`);
 }
 
-module.exports = { openRegisterIfNeeded, registerStatus, closeRegisterSession, openRegisterSession };
+module.exports = { openRegisterIfNeeded, registerStatus, closeRegisterSession, openRegisterSession, searchCashRegister, clearBlockingOverlay };

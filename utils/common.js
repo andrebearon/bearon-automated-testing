@@ -27,19 +27,26 @@ async function bestEffort(label, fn) {
 
 // Delete a row via its kebab menu (View / Delete), then verify it is gone from
 // a fresh search. Throws on failure; wrap in bestEffort() for cleanup.
-async function deleteByKebab(page, { listUrl, searchTerm, label }) {
+// kebabIndex: which row button is the kebab — 1 on most lists (products,
+// categories, suppliers, POs), 2 on the customers list (button 1 there is
+// "Open customer"). FIX (12 Nov 2026): the else branch used to click an
+// exact-text "Delete" with no timeout bound, burning the whole test timeout
+// when no such text existed (spec 13 run 2) — it now fails fast instead.
+async function deleteByKebab(page, { listUrl, searchTerm, label, kebabIndex = 1 }) {
   await page.goto(listUrl);
   const search = page.getByPlaceholder(/search/i).first();
   await search.fill(searchTerm);
   await sleep(2000);
   const row = page.locator('tr', { hasText: searchTerm }).first();
   await expect(row).toBeVisible({ timeout: 30000 });
-  await row.locator('button').nth(1).click();
+  await row.locator('button').nth(kebabIndex).click();
   await sleep(1200);
   const menuDelete = page.getByRole('menuitem', { name: /delete/i }).first();
   if (await menuDelete.count()) {
     await menuDelete.click();
   } else {
+    await expect(page.getByText('Delete', { exact: true }).last())
+      .toBeVisible({ timeout: 15000 });
     await page.getByText('Delete', { exact: true }).last().click();
   }
   // The confirm dialog renders async; a Received PO shows a different title.

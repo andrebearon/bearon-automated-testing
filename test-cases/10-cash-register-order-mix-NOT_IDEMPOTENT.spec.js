@@ -14,7 +14,9 @@
  *   7. Verify today's session in All Logs; guard Default register still Open.
  *
  * Data:    "Mix Reg <suffix>", "Mix Prod <suffix>", orders A-D.
- * Cleanup: product deleted best-effort; register stays (no Delete control).
+ * Cleanup: product deleted best-effort; register stays (no Delete control,
+ *          Closed is the terminal state). Orders end in terminal states by
+ *          design: A voided, B refunded, C stays Paid, pending D cancelled.
  * Needs:   Slot 1 free (no leftover pending order on it). The test turns ON
  *          "Let staff hold open orders".
  */
@@ -28,23 +30,26 @@ const PRICE = 10000;
 const todayStr = h.todayDdMmYyyy();
 
 // The till can revert to Default after navigation; re-select OUR register before every sale.
+// The selector shows "<name> (Counter)" — compare the name before the trailing parenthetical.
 async function ensureTillRegister(page, reg) {
   await page.goto(h.URLS.till);
   await h.sleep(2000);
   const combos = page.locator('button[role="combobox"]');
   await expect(combos.nth(1)).toBeVisible({ timeout: 30000 });
+  const shownName = (s) => s.replace(/\s*\([^)]*\)\s*$/, '');
   const current = (await combos.nth(1).innerText()).trim();
-  if (current === reg) return;
+  if (shownName(current) === reg) return;
   console.log(`TILL REGISTER SHOWS "${current}", re-selecting ${reg}`);
   for (let attempt = 0; attempt < 2; attempt++) {
-    await combos.nth(1).click();
+    await h.clearBlockingOverlay(page, 'till register re-select');
+    await combos.nth(1).click({ timeout: 10000 });
     await h.sleep(1500);
     const opt = page.getByRole('option', { name: reg }).first();
     await expect(opt).toBeVisible({ timeout: 15000 });
     await opt.click({ timeout: 15000 });
     await h.sleep(2000);
     const shown = (await combos.nth(1).innerText()).trim();
-    if (shown === reg) { console.log(`TILL REGISTER RE-SELECTED: ${reg}`); return; }
+    if (shownName(shown) === reg) { console.log(`TILL REGISTER RE-SELECTED: ${reg} (shown as "${shown}")`); return; }
   }
   throw new Error(`Till register selector still not ${reg}`);
 }
@@ -99,18 +104,21 @@ test('E2E order mix on NEW register: void 1, refund 1, cancel 1, close + verify'
   console.log(`SALES: void-target ${saleVoid.ref} (1x Cash Rp10,000), refund-target ${saleRefund.ref} (2x Card Rp20,000), stays-paid ${salePaid.ref} (1x Cash Rp10,000)`);
 
   // ---- 4. Save a pending order on Slot 1 (1 x Rp10,000) ---------------------
+  // Verified via OM, not the till panel: after Save Order the app shows an
+  // "Order Saved Successfully" dialog, and once it is closed the till panel
+  // cannot be reopened from an empty cart ("Save Pending Order" is disabled
+  // with no items, and there is no other entry point to the list) — see
+  // utils/till.js openPendingList. OM lists the same pending with its ref.
   await h.setPosFeature(page, h.POS_FEATURES.holdOrders, true);
   await ensureTillRegister(page, REG);
   await h.savePendingOnSlot(page, { product: PRODUCT, slot: 'Slot 1' });
-  await h.openPendingList(page);
+  await gotoPendingTab(page);
   const pendBody = await page.locator('body').innerText();
   expect(pendBody).toContain('Rp10.000');
   expect(pendBody).toContain('Slot 1');
   const pendRef = (pendBody.match(/PCEE-\d+/) || [])[0];
-  if (!pendRef) throw new Error('Pending order ref (PCEE-...) not found in Show Orders list');
+  if (!pendRef) throw new Error('Pending order ref (PCEE-...) not found in OM Pending Orders list');
   console.log(`PENDING SAVED: ${pendRef} on Slot 1, Rp10.000`);
-  await page.getByRole('button', { name: 'Close' }).first().click().catch(() => {});
-  await h.sleep(1500);
 
   // ---- 5. Void the cash order, verify Voided after reload --------------------
   await h.openOrderDetails(page, saleVoid.ref);
@@ -150,11 +158,16 @@ test('E2E order mix on NEW register: void 1, refund 1, cancel 1, close + verify'
   await h.sleep(2000);
   const cancelBody = await page.locator('body').innerText();
   console.log('AFTER CANCEL CLICK:', cancelBody.replace(/\n+/g, ' | ').slice(-400));
-  // Confirm via Confirm/Yes only, never the plain "Cancel" dismiss button.
-  const confirmBtn = page.getByRole('button', { name: /confirm|yes/i }).first();
-  if (/are you sure/i.test(cancelBody) && await confirmBtn.count()) {
-    console.log('CANCEL CONFIRM BTN:', await confirmBtn.innerText());
-    await confirmBtn.click();
+  // FIX (11 Nov 2026, test 10 run 4): the confirm dialog is "Cancel this
+  // order? ..." with Keep order / Cancel order / Close. Its confirm button is
+  // literally "Cancel order" — the old /confirm|yes/i matcher never matched
+  // it, so the cancel was never confirmed and the order stayed listed. Scope
+  // the confirm click to the dialog so the first "Cancel order" (which opened
+  // the dialog) is never re-clicked.
+  const cancelDlg = page.locator('[role="dialog"]', { hasText: 'Cancel this order?' }).first();
+  if (await cancelDlg.count()) {
+    console.log('CANCEL CONFIRM DIALOG present — clicking its Cancel order button');
+    await cancelDlg.getByRole('button', { name: 'Cancel order', exact: true }).click();
     await h.sleep(3000);
   }
   const afterCancel = await page.locator('body').innerText();

@@ -11,7 +11,8 @@
  *   7. Guard: the "Default" register is still Open and untouched.
  *
  * Data:    "Reg CRUD <suffix>" renamed to "Reg CRUD <suffix>U".
- * Cleanup: none possible — registers have no Delete control; one Closed register per run remains.
+ * Cleanup: none possible — registers have no Delete control; one Closed
+ *          register per run remains. Closed is the terminal state.
  * Known:   Flaky at step 3 (till register pick sometimes does not apply,
  *          an overlay can block the retry). See docs/results/.
  */
@@ -95,7 +96,10 @@ test('cash register CRUD: create, rename, open session, read logs, close session
   }
 
   // ---- 7. Guard: Default register still Open --------------------------------
+  // Default is the oldest register, so it sits on page 2 of the table —
+  // search for it first (see registerStatus).
   await page.goto(h.URLS.cashRegisters);
+  await h.searchCashRegister(page, 'Default');
   await expect(page.locator('tr', { hasText: 'Default' }).first()).toContainText('Open', { timeout: 30000 });
   console.log('GUARD OK: Default register still Open');
 });

@@ -186,9 +186,43 @@ async function deleteProductByKebab(page, productName) {
   console.log(`DELETED: product ${productName}`);
 }
 
+// Delete a category via the categories-list row kebab. The details panel has
+// name + Save + Close and NO Delete — Delete lives only in the row kebab menu
+// (proven by 02-category-crud). Throws on failure; wrap in bestEffort() for cleanup.
+async function deleteCategoryByKebab(page, categoryName) {
+  await page.goto(URLS.categories);
+  const search = page.getByPlaceholder(/search categories/i).first();
+  await search.fill(categoryName);
+  await sleep(1500);
+  const row = page.locator('tr', { hasText: categoryName }).first();
+  await expect(row).toBeVisible({ timeout: 30000 });
+  await row.locator('button').filter({ hasNotText: /.+/ }).first().click();
+  await sleep(1200);
+  const menuDelete = page.getByRole('menuitem', { name: /delete/i }).first();
+  if (await menuDelete.count()) {
+    await menuDelete.click();
+  } else {
+    await page.getByText('Delete', { exact: true }).last().click();
+  }
+  // The Delete Confirmation dialog renders asynchronously — poll for it.
+  let confirmed = false;
+  for (let i = 0; i < 60; i++) {
+    if (await page.getByText('Delete Confirmation').first().count()) {
+      await page.getByRole('button', { name: 'Delete', exact: true }).last().click();
+      confirmed = true;
+      break;
+    }
+    if ((await page.locator('tr', { hasText: categoryName }).count()) === 0) break;
+    await sleep(500);
+  }
+  console.log(`CATEGORY DELETE ${confirmed ? 'CONFIRMED' : 'no dialog seen'}: ${categoryName}`);
+  await expect(page.getByText(categoryName, { exact: true })).toHaveCount(0, { timeout: 30000 });
+  console.log(`DELETED: category ${categoryName}`);
+}
+
 module.exports = {
   ensureCategory, selectCategoryInForm,
   fillProductGeneral, fillProductOptions, fillProductAddOns, saveProductForm,
   findProductInList, openProductDetails, createSimpleProduct,
-  getProductCurrentStock, deleteProductByKebab,
+  getProductCurrentStock, deleteProductByKebab, deleteCategoryByKebab,
 };

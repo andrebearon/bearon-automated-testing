@@ -66,30 +66,32 @@ before changing a helper.
 
 **Idempotency is in the filename.** A test is idempotent by default: it deletes
 everything it creates and can run any number of times without leaving data.
-A test that leaves data behind ends in `-NOT_IDEMPOTENT.spec.js`, usually
-because the app cannot delete the record (sales orders, cash registers).
+A record the app cannot delete counts as cleaned up when it ends in a terminal
+state (voided, refunded, cancelled, Closed) — the state is final and the record
+is out of every active list. A test that leaves data behind in any other state
+ends in `-NOT_IDEMPOTENT.spec.js`, usually because the app cannot delete the
+record (cash registers) or the test keeps an order Paid by design.
 Run `npm run test:idempotent` to skip those.
 
 | # | File | What it covers | Leaves behind |
 |---|---|---|---|
-| 01 | `01-product-crud-NOT_IDEMPOTENT.spec.js` | Product with new category, options, add-ons: create, verify, update, delete | 1 category (no delete control on its details page) |
+| 01 | `01-product-crud.spec.js` | Product with new category, options, add-ons: create, verify, update, delete | nothing (category deleted via row kebab, same pattern as 02) |
 | 02 | `02-category-crud.spec.js` | Category create, rename, delete | nothing |
 | 03 | `03-supplier-crud.spec.js` | Supplier create, verify, update, delete | nothing |
 | 04 | `04-purchase-order-crud.spec.js` | PO create, verify, update qty, receive, delete | nothing |
 | 05 | `05-supplier-purchase-order-flow.spec.js` | New supplier + PO, receive, stock goes "-" to 5 | nothing |
 | 06 | `06-stock-adjustment.spec.js` | Stock adjustments +10 then -3, list matches editor | nothing |
-| 07a | `07a-sales-order-management-NOT_IDEMPOTENT.spec.js` | Cash + card sales, OM details, note, void, refund | 2 orders (voided, refunded) |
-| 07b | `07b-product-to-order-NOT_IDEMPOTENT.spec.js` | Smoke: product, cash sale, order in OM, details | 1 product + 1 Paid order |
-| 08 | `08-kitchen-display-NOT_IDEMPOTENT.spec.js` | Kitchen board: order appears, Not started to Completed | 1 voided order |
-| 09 | `09-cash-register-crud-NOT_IDEMPOTENT.spec.js` | New register: create, rename, open, logs, close | 1 Closed register (no delete in UI) |
-| 10 | `10-cash-register-order-mix-NOT_IDEMPOTENT.spec.js` | New register: void 1, refund 1, cancel pending 1, close = Rp10,000 | 1 Closed register, 3 orders, 1 cancelled pending order |
-| 11 | `11-pending-order-crud-NOT_IDEMPOTENT.spec.js` | Pending order on Slot 2: create, qty update, delete | the pending order, if no delete control is found |
-| 12 | `12-pending-order-flow-NOT_IDEMPOTENT.spec.js` | Pending on Slot 1, move to Slot 2, checkout, Paid in OM | 1 Paid order |
+| 07a | `07a-sales-order-management.spec.js` | Cash + card sales, OM details, note, void, refund | 2 orders in terminal states (1 voided, 1 refunded) |
+| 07b | `07b-product-to-order.spec.js` | Smoke: product, cash sale, order in OM, details | 1 order voided (terminal state) |
+| 08 | `08-kitchen-display-NOT_IDEMPOTENT.spec.js` | Kitchen board: order appears, Not started to Completed | 1 Paid order (no Void control after kitchen completion) |
+| 09 | `09-cash-register-crud-NOT_IDEMPOTENT.spec.js` | New register: create, rename, open, logs, close | 1 Closed register (no delete in UI; Closed = terminal state) |
+| 10 | `10-cash-register-order-mix-NOT_IDEMPOTENT.spec.js` | New register: void 1, refund 1, cancel pending 1, close = Rp10,000 | 1 Closed register; orders voided, refunded, 1 Paid by design; 1 cancelled pending order |
+| 11 | `11-pending-order-crud.spec.js` | Pending order on Slot 2: create, qty update, delete | nothing (pending order deleted, or cancelled if no delete control) |
+| 12 | `12-pending-order-flow.spec.js` | Pending on Slot 1, move to Slot 2, checkout, Paid in OM | 1 order voided (terminal state) |
 | 13 | `13-customer-crud.spec.js` | Customer create, update phone, delete | nothing |
-| 14 | — not written yet — | POS sale with a customer, history in customer details | |
+| 14 | `14-sales-with-customer.spec.js` | POS sale with a customer, history in customer details | 1 order voided (terminal state) |
 
-Latest status (10 Nov 2026): 01–08 pass. 09 is flaky at the till register pick
-(an overlay blocks the retry), which stops 10–13 when run as a gated chain. See
+Latest status (12 Nov 2026): 01–09, 11, 12, 13, 14 pass individually. 10 has never run green (cancel-confirm fix unproven; retry 5 got NO VERDICT from the VM blocker). 08 stays NOT_IDEMPOTENT (kitchen-completed order has no Void control). See
 `docs/results/` for the full history.
 
 ## Running
@@ -182,8 +184,8 @@ Piping into `tail` hides Playwright's exit code.
    If it is missing, stop and ask the user to create it from `.env.example`.
 2. Start with a fast idempotent test (`02-category-crud`) to confirm login works.
 3. Run test cases one at a time in number order. Ask before running
-   `-NOT_IDEMPOTENT` tests if the user only asked for a clean check. 09–12
-   change register and pending-order state, so stop and report if one fails.
+   `-NOT_IDEMPOTENT` tests if the user only asked for a clean check. 09–10
+   change register state, so stop and report if one fails.
 4. For each run, note pass/fail, duration, order refs and leftovers from the
    console log lines (`PRODUCT CREATED`, `SALE COMPLETED`, `CLEANUP SKIPPED`…).
 5. Write a dated log to `docs/results/YYYY-MM-DD-<topic>.md`. Do not edit old logs.
@@ -194,8 +196,10 @@ Piping into `tail` hides Playwright's exit code.
 
 1. Pick the next number and a name: `test-cases/NN-<area>-<what>.spec.js`
    (`-crud` for create/read/update/delete of one entity, `-flow` for a multi-step journey).
-   If the test leaves any data behind after a passing run, name it
-   `NN-<area>-<what>-NOT_IDEMPOTENT.spec.js` and say what is left in `Cleanup:`.
+   If the test leaves any data behind in a non-terminal state after a passing
+   run, name it `NN-<area>-<what>-NOT_IDEMPOTENT.spec.js` and say what is left
+   in `Cleanup:`. A record in a terminal state (voided, refunded, cancelled,
+   Closed) counts as cleaned up, not left behind.
 2. Start from this template:
 
 ```js

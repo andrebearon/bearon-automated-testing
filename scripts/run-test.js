@@ -1,6 +1,6 @@
 // Run test cases by number or by name, without typing the full file path.
 //   npm run test:one -- 3              -> test-cases/03-supplier-crud.spec.js
-//   npm run test:one -- 7a             -> test-cases/07a-sales-order-management-NOT_IDEMPOTENT.spec.js
+//   npm run test:one -- 7a             -> test-cases/07a-sales-order-management.spec.js
 //   npm run test:one -- supplier-crud  -> any file whose name contains it (case-insensitive)
 //   npm run test:one -- 2 3 13         -> several test cases (Playwright runs them in file order)
 //   npm run test:one -- 3 --headed     -> anything starting with "-" goes to Playwright

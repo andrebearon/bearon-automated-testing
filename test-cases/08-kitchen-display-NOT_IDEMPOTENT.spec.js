@@ -10,7 +10,12 @@
  *   5. Restore kitchen tickets to the previous state (always, via finally).
  *
  * Data:    "Kitchen Prod <suffix>" and its order.
- * Cleanup: order voided + product deleted, both best-effort.
+ * Cleanup: product deleted best-effort; the order stays Paid — after it
+ *          reaches Completed on the kitchen board its details page shows
+ *          no Void control, so it cannot be voided or deleted (proven by
+ *          the 11 Nov run: CEE-51034 stayed Paid, "no Void control").
+ *          Re-check the OM list row for a void action before renaming
+ *          this test idempotent again.
  * Notes:   The board refreshes on a ~60s poll, so this is the slowest test (15 min budget).
  */
 const { test, expect } = require('@playwright/test');
@@ -72,6 +77,13 @@ test('kitchen display: order appears, progresses to completed', async ({ page })
         await voidBtn.click();
         await page.locator('textarea').last().fill(`Kitchen test void ${suffix}`);
         await page.getByRole('button', { name: 'Void order', exact: true }).last().click();
+        await h.sleep(2000);
+        await page.reload();
+        await expect(page.getByText('Voided', { exact: true }).first())
+          .toBeVisible({ timeout: 30000 });
+        console.log(`CLEANUP: order ${orderRef} voided (verified after reload)`);
+      } else {
+        throw new Error(`no Void control on order ${orderRef}`);
       }
     });
   }
